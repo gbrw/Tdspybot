@@ -62,7 +62,4 @@ def check_links():
 print("🚀 البوت يعمل... في انتظار أي تغيير")
 while True:
     check_links()
-    time.sleep(300)    check_links()
-    time.sleep(300)  # كل 5 دقائقwhile True:
-    check_links()
-    time.sleep(300)  # كل 5 دقائق
+    time.sleep(300)

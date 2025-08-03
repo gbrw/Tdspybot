@@ -12,7 +12,8 @@ links_status = {
     "https://testflight.apple.com/join/1Z9HQgNw": None,
     "https://testflight.apple.com/join/6drWGVde": None,
     "https://testflight.apple.com/join/uk4993r5": None,
-    "https://testflight.apple.com/join/kYbkecxa": None
+    "https://testflight.apple.com/join/kYbkecxa": None,
+    "https://testflight.apple.com/join/3PdCDQYe": None
 }
 
 STATUS_FILE = "status.json"

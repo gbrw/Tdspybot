@@ -2,8 +2,7 @@ import requests
 import time
 
 # إعدادات تيليجرام
-TELEGRAM_TOKEN = "
-          8432204706:AAGMbjgIzIMxIfgv7zAjfGNQXFgAMSzcj2k"
+TELEGRAM_TOKEN = "8432204706:AAGMbjgIzIMxIfgv7zAjfGNQXFgAMSzcj2k"
 CHAT_ID = "238547634"
 
 # روابط TestFlight

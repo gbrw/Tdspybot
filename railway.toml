@@ -8,3 +8,8 @@ restartPolicyType = "ON_FAILURE"
 DATA_DIR = "/data"
 POLL_MIN_SEC = "240"
 POLL_MAX_SEC = "360"
+
+[volumes]
+  [volumes.data]
+  mountPath = "/data"
+  sizeGB = 1

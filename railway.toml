@@ -1,0 +1,10 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+
+[variables]
+DATA_DIR = "/data"
+POLL_MIN_SEC = "240"
+POLL_MAX_SEC = "360"

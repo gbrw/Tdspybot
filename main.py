@@ -7,22 +7,16 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     raise SystemExit("❌ TELEGRAM_TOKEN غير موجود في المتغيرات.")
 
-# معرف المدير (ثابت)
-ADMIN_IDS = {238547634}
+ADMIN_IDS = {238547634}  # معرف المدير
 
-# الفاصل الزمني بين الفحوصات (ثواني)
-POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "60"))
-POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "60"))
+POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "60"))   # افتراضي 60 ثانية
+POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "60"))   # افتراضي 60 ثانية
 
-# مسار التخزين
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
-# بيانات المالك
 OWNER_NAME = "غيث الراوي"
 OWNER_IG = "https://instagram.com/gb.rw"
 OWNER_TG = "https://t.me/gb.rw"
-
-# روابط مهمة
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
 APP_NAME_AR = "TDS Video"
 
@@ -34,6 +28,9 @@ PATH_EVENTS = os.path.join(DATA_DIR, "events.json")
 PATH_LASTUPD = os.path.join(DATA_DIR, "last_update_id.txt")
 PATH_KV = os.path.join(DATA_DIR, "kv.json")
 
+# ذاكرة مؤقتة لإدخال الرابط بعد زر الإضافة/الحذف
+PENDING_ACTIONS = {}  # { chat_id: {"action": "add"|"remove"} }
+
 # =================== جلسة HTTP ===================
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 session = requests.Session()
@@ -42,7 +39,7 @@ session.headers.update({
     "Accept-Language": "en-US,en;q=0.8",
 })
 
-# =================== أدوات تخزين ===================
+# =================== أدوات التخزين ===================
 def _read_json(path, default):
     try:
         if not os.path.exists(path): return default
@@ -57,31 +54,15 @@ def _write_json_atomic(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
-def kv_get(key, default=None):
-    kv = _read_json(PATH_KV, {})
-    return kv.get(key, default)
-
-def kv_set(key, value):
-    kv = _read_json(PATH_KV, {})
-    kv[key] = value
-    _write_json_atomic(PATH_KV, kv)
-
-# =================== المشتركين ===================
+# =================== مشتركين وروابط ===================
 def add_subscriber(chat_id):
     subs = set(_read_json(PATH_SUBS, []))
     subs.add(chat_id)
     _write_json_atomic(PATH_SUBS, list(subs))
 
-def remove_subscriber(chat_id):
-    subs = set(_read_json(PATH_SUBS, []))
-    if chat_id in subs:
-        subs.remove(chat_id)
-        _write_json_atomic(PATH_SUBS, list(subs))
-
 def list_subscribers():
     return _read_json(PATH_SUBS, [])
 
-# =================== الروابط ===================
 def get_links():
     return _read_json(PATH_LINKS, {})
 
@@ -99,7 +80,7 @@ def remove_link(url):
         links.pop(url.strip())
         save_links(links)
 
-# =================== الأحداث ===================
+# =================== الأحداث/الإحصائيات ===================
 def append_event(link, old_status, new_status):
     events = _read_json(PATH_EVENTS, [])
     events.append({
@@ -116,27 +97,21 @@ def stats_snapshot():
     events = _read_json(PATH_EVENTS, [])
     navailable = sum(1 for e in events if e.get("new") == "متاح")
     last_event = events[-1]["ts"] if events else "—"
-    started = kv_get("started_at", "—")
+    started = _read_json(PATH_KV, {}).get("started_at", "—")
     return subs, len(links), len(events), navailable, started, last_event
 
-# =================== رسائل وأزرار ===================
+# =================== الأزرار ===================
 def make_control_keyboard():
-    kb = {
-        "keyboard": [
-            ["📊 الحالة الآن", "📜 القائمة"],
-            ["ℹ️ معلومات", "🛑 إلغاء الاشتراك"]
-        ],
-        "resize_keyboard": True
-    }
+    kb = {"keyboard": [["📊 الحالة الآن"], ["ℹ️ معلومات"]], "resize_keyboard": True}
     return json.dumps(kb, ensure_ascii=False)
 
 def make_admin_keyboard():
     kb = {
         "keyboard": [
-            ["📊 الحالة الآن", "📜 القائمة"],
-            ["ℹ️ معلومات", "🛑 إلغاء الاشتراك"],
-            ["🛠 روابط", "➕ إضافة رابط", "➖ حذف رابط"],
-            ["👥 المشتركين", "📢 بث", "⏱ تغيير الفاصل"]
+            ["📊 الحالة الآن"], ["ℹ️ معلومات"],
+            ["🛠 إدارة الروابط"],
+            ["➕ إضافة رابط", "➖ حذف رابط"],
+            ["📢 بث رسالة"]
         ],
         "resize_keyboard": True
     }
@@ -152,6 +127,16 @@ def make_main_inline():
     }
     return json.dumps(kb, ensure_ascii=False)
 
+# =================== رسائل ===================
+def send_message(chat_id, text, parse_mode=None, reply_markup=None):
+    data = {"chat_id": chat_id, "text": text}
+    if parse_mode: data["parse_mode"] = parse_mode
+    if reply_markup: data["reply_markup"] = reply_markup
+    try:
+        session.post(f"{API_BASE}/sendMessage", data=data, timeout=15)
+    except Exception as e:
+        print(f"❌ send_message failed: {e}")
+
 def format_user_name(from_obj):
     if not from_obj: return "صديقي"
     fn = (from_obj.get("first_name") or "").strip()
@@ -161,17 +146,6 @@ def format_user_name(from_obj):
     if full: return full
     if uname: return "@" + uname
     return fn or "صديقي"
-
-def send_message(chat_id, text, parse_mode=None, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        data["parse_mode"] = parse_mode
-    if reply_markup:
-        data["reply_markup"] = reply_markup
-    try:
-        session.post(f"{API_BASE}/sendMessage", data=data, timeout=15)
-    except Exception as e:
-        print(f"❌ send_message failed: {e}")
 
 def send_welcome(chat_id, from_obj, is_admin=False):
     name = format_user_name(from_obj)
@@ -183,13 +157,10 @@ def send_welcome(chat_id, from_obj, is_admin=False):
         "📌 إذا توفر مكان شاغر سيتم إشعارك فورًا.\n\n"
         "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون TestFlight.\n"
         "⬇️ حمّله من الزر أدناه.\n\n"
-        f"👨‍💻 المطور: {OWNER_NAME}\n"
-        f"📸 Instagram: {OWNER_IG}\n"
-        f"✈️ Telegram: {OWNER_TG}"
     )
     send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_inline())
 
-# =================== فحص TestFlight ===================
+# =================== فحص الروابط ===================
 FULL_PATTERNS = ["This beta is full", "no longer accepting new testers"]
 AVAILABLE_PATTERNS = ["Join the beta", "Start Testing"]
 GONE_PATTERNS = ["app you're looking for can't be found", "app you’re looking for can’t be found"]
@@ -201,15 +172,12 @@ def classify_html(html):
     if any(p.lower() in h for p in AVAILABLE_PATTERNS): return "متاح"
     return "غير واضح"
 
-def fetch(url, retries=3, timeout=15):
-    for i in range(retries):
-        try:
-            r = session.get(url, timeout=timeout)
-            if r.status_code == 200:
-                return r.text
-        except:
-            pass
-        time.sleep(1)
+def fetch(url):
+    try:
+        r = session.get(url, timeout=15)
+        if r.status_code == 200: return r.text
+    except:
+        pass
     return None
 
 def summarize():
@@ -258,7 +226,7 @@ def updates_worker():
                 from_obj = msg.get("from")
                 is_admin = chat_id in ADMIN_IDS
 
-                # أزرار المستخدم
+                # أوامر عامة
                 if text.lower().startswith("/start"):
                     add_subscriber(chat_id)
                     send_welcome(chat_id, from_obj, is_admin)
@@ -266,40 +234,75 @@ def updates_worker():
                 if text in ["📊 الحالة الآن", "/status"]:
                     send_message(chat_id, summarize() or "لا توجد حالة بعد.")
                     continue
-                if text in ["📜 القائمة", "/menu"]:
-                    send_message(chat_id, "اختر من الأزرار:", reply_markup=make_main_inline())
-                    continue
                 if text in ["ℹ️ معلومات", "/about"]:
                     send_message(chat_id, f"👨‍💻 {OWNER_NAME}\n📸 {OWNER_IG}\n✈️ {OWNER_TG}")
                     continue
-                if text in ["🛑 إلغاء الاشتراك", "/stop"]:
-                    remove_subscriber(chat_id)
-                    send_message(chat_id, "🛑 تم إلغاء الاشتراك.")
-                    continue
 
-                # أزرار المدير
+                # أوامر المدير
                 if is_admin:
-                    if text in ["🛠 روابط", "/links"]:
+                    if text in ["🛠 إدارة الروابط", "/links"]:
                         links = get_links()
                         if not links:
                             send_message(chat_id, "لا توجد روابط.")
                         else:
-                            send_message(chat_id, "\n".join([f"- {u}: {meta['status']}" for u, meta in links.items()]))
+                            lines = ["🔗 الروابط:"]
+                            for u, meta in links.items():
+                                lines.append(f"- {u}  ({meta.get('status') or '—'})")
+                            send_message(chat_id, "\n".join(lines))
                         continue
-                    if text.startswith("➕") or text.startswith("/addlink"):
-                        send_message(chat_id, "أرسل الرابط بصيغة:\n/addlink <url>")
+
+                    if text == "➕ إضافة رابط":
+                        PENDING_ACTIONS[chat_id] = {"action": "add"}
+                        send_message(chat_id, "أرسل الرابط الآن:")
                         continue
-                    if text.startswith("➖") or text.startswith("/removelink"):
-                        send_message(chat_id, "أرسل الرابط بصيغة:\n/removelink <url>")
+                    if text == "➖ حذف رابط":
+                        PENDING_ACTIONS[chat_id] = {"action": "remove"}
+                        send_message(chat_id, "أرسل الرابط الذي تريد حذفه:")
                         continue
-                    if text in ["👥 المشتركين", "/subs"]:
-                        send_message(chat_id, f"👥 المشتركين: {len(list_subscribers())}")
+
+                    if text.startswith("/addlink"):
+                        parts = text.split(maxsplit=1)
+                        if len(parts) == 2 and parts[1].startswith("http"):
+                            add_link(parts[1])
+                            send_message(chat_id, "✅ تمت الإضافة.")
+                        else:
+                            send_message(chat_id, "صيغة خاطئة.")
                         continue
-                    if text in ["📢 بث", "/broadcast"]:
-                        send_message(chat_id, "أرسل الرسالة:\n/broadcast <نص>")
+                    if text.startswith("/removelink"):
+                        parts = text.split(maxsplit=1)
+                        if len(parts) == 2:
+                            remove_link(parts[1])
+                            send_message(chat_id, "🗑️ تم الحذف.")
+                        else:
+                            send_message(chat_id, "صيغة خاطئة.")
                         continue
-                    if text in ["⏱ تغيير الفاصل", "/setinterval"]:
-                        send_message(chat_id, "أرسل:\n/setinterval <min> <max>")
+
+                    if text == "📢 بث رسالة":
+                        send_message(chat_id, "أرسل نص الرسالة:")
+                        PENDING_ACTIONS[chat_id] = {"action": "broadcast"}
+                        continue
+
+                # استقبال الروابط أو البث بناءً على الإجراء المعلّق
+                if chat_id in PENDING_ACTIONS:
+                    act = PENDING_ACTIONS.pop(chat_id)
+                    if act["action"] == "add":
+                        if text.startswith("http"):
+                            add_link(text)
+                            send_message(chat_id, "✅ تمت الإضافة.")
+                        else:
+                            send_message(chat_id, "صيغة غير صحيحة.")
+                        continue
+                    if act["action"] == "remove":
+                        if text.startswith("http"):
+                            remove_link(text)
+                            send_message(chat_id, "🗑️ تم الحذف.")
+                        else:
+                            send_message(chat_id, "صيغة غير صحيحة.")
+                        continue
+                    if act["action"] == "broadcast":
+                        for cid in list_subscribers():
+                            send_message(cid, text)
+                        send_message(chat_id, "✅ تم الإرسال.")
                         continue
 
         except Exception as e:
@@ -332,8 +335,10 @@ def checker_worker():
             if changed_any:
                 save_links(links)
                 for u in newly_available:
-                    broadcast(f"🚨 متاح الآن:\n{u}")
-                broadcast(summarize())
+                    for cid in list_subscribers():
+                        send_message(cid, f"🚨 متاح الآن:\n{u}")
+                for cid in list_subscribers():
+                    send_message(cid, summarize())
             time.sleep(random.randint(POLL_MIN_SEC, POLL_MAX_SEC))
         except Exception as e:
             print("⚠️ checker_worker error:", e)
@@ -343,10 +348,10 @@ def checker_worker():
 def main():
     if not os.path.exists(PATH_LINKS):
         save_links({})
-    kv_set("started_at", datetime.utcnow().isoformat())
+    _write_json_atomic(PATH_KV, {"started_at": datetime.utcnow().isoformat()})
     threading.Thread(target=updates_worker, daemon=True).start()
     threading.Thread(target=checker_worker, daemon=True).start()
-    print("🚀 Bot is running")
+    print("🚀 Bot is running...")
     while True:
         time.sleep(300)
 

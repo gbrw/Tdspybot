@@ -16,7 +16,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 OWNER_NAME = "غيث الراوي"
 OWNER_IG = "https://instagram.com/gb.rw"
-OWNER_TG = "https://t.me/gb.rw"
+OWNER_TG = "https://t.me/gb_rw"
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
 APP_NAME_AR = "TDS Video"
 

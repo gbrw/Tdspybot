@@ -186,8 +186,11 @@ def summarize():
     groups = {"متاح": [], "ممتلئ": [], "غير موجود": [], "غير واضح": []}
     for url, meta in links.items():
         groups.get(meta.get("status") or "غير واضح", groups["غير واضح"]).append(url)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"📊 حالة الروابط الآن ({now}):", ""]
+
+    # التاريخ فقط + كلمة "الآن"
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = [f"📊 حالة الروابط الآن ({today} - الآن):", ""]
+
     for st in ["متاح", "ممتلئ", "غير موجود", "غير واضح"]:
         if groups[st]:
             icon = "✅" if st == "متاح" else "⚠️" if st == "ممتلئ" else "❌" if st == "غير موجود" else "❓"

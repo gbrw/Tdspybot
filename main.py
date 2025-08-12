@@ -2,55 +2,53 @@
 import os, time, json, random, tempfile, threading, requests
 from datetime import datetime
 
-# =================== الإعدادات من المتغيرات ===================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")  # ضع القيمة في Variables على Railway
+# =================== الإعدادات ===================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
-    raise SystemExit("❌ لم يتم العثور على TELEGRAM_TOKEN في المتغيرات.")
+    raise SystemExit("❌ TELEGRAM_TOKEN غير موجود في المتغيرات.")
 
-# مدير واحد ثابت كما طلبت (يمكن أيضًا تمريره من البيئة لو تحب لاحقًا)
+# معرف المدير (ثابت)
 ADMIN_IDS = {238547634}
 
-# الفترة بين الفحوصات (ثواني) – قابلة للتغيير بأمر /setinterval من المدير
-POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "240"))
-POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "360"))
+# الفاصل الزمني بين الفحوصات (ثواني)
+POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "60"))
+POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "60"))
 
-# مسار التخزين (اربط Volume على /data في Railway)
+# مسار التخزين
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
-# بيانات المالك / الحقوق
+# بيانات المالك
 OWNER_NAME = "غيث الراوي"
 OWNER_IG = "https://instagram.com/gb.rw"
-OWNER_TG = "https://t.me/gb_rw"
+OWNER_TG = "https://t.me/gb.rw"
 
-# روابط وأسماء مهمة
+# روابط مهمة
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
 APP_NAME_AR = "TDS Video"
 
 # =================== مسارات الملفات ===================
 os.makedirs(DATA_DIR, exist_ok=True)
 PATH_SUBS = os.path.join(DATA_DIR, "subscribers.json")
-PATH_LINKS = os.path.join(DATA_DIR, "links.json")   # { url: {status, last_change} }
-PATH_EVENTS = os.path.join(DATA_DIR, "events.json") # قائمة أحداث تغيّر الحالة
+PATH_LINKS = os.path.join(DATA_DIR, "links.json")
+PATH_EVENTS = os.path.join(DATA_DIR, "events.json")
 PATH_LASTUPD = os.path.join(DATA_DIR, "last_update_id.txt")
-PATH_KV = os.path.join(DATA_DIR, "kv.json")         # { "started_at": "...", ... }
+PATH_KV = os.path.join(DATA_DIR, "kv.json")
 
 # =================== جلسة HTTP ===================
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept-Language": "en-US,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 })
 
-# =================== أدوات تخزين (JSON) ===================
+# =================== أدوات تخزين ===================
 def _read_json(path, default):
     try:
         if not os.path.exists(path): return default
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except:
         return default
 
 def _write_json_atomic(path, data):
@@ -85,7 +83,6 @@ def list_subscribers():
 
 # =================== الروابط ===================
 def get_links():
-    # links.json: { url: { "status": "...", "last_change": "ISO" } }
     return _read_json(PATH_LINKS, {})
 
 def save_links(links_map):
@@ -102,7 +99,7 @@ def remove_link(url):
         links.pop(url.strip())
         save_links(links)
 
-# =================== الأحداث/الإحصائيات ===================
+# =================== الأحداث ===================
 def append_event(link, old_status, new_status):
     events = _read_json(PATH_EVENTS, [])
     events.append({
@@ -122,34 +119,38 @@ def stats_snapshot():
     started = kv_get("started_at", "—")
     return subs, len(links), len(events), navailable, started, last_event
 
-# =================== تيليجرام: إرسال رسائل ===================
-def send_message(chat_id, text, parse_mode=None, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        data["parse_mode"] = parse_mode
-    if reply_markup:
-        data["reply_markup"] = reply_markup
-    try:
-        session.post(f"{API_BASE}/sendMessage", data=data, timeout=15)
-    except Exception as e:
-        print(f"❌ send_message({chat_id}) failed: {e}")
+# =================== رسائل وأزرار ===================
+def make_control_keyboard():
+    kb = {
+        "keyboard": [
+            ["📊 الحالة الآن", "📜 القائمة"],
+            ["ℹ️ معلومات", "🛑 إلغاء الاشتراك"]
+        ],
+        "resize_keyboard": True
+    }
+    return json.dumps(kb, ensure_ascii=False)
 
-def broadcast(text):
-    for cid in list_subscribers():
-        send_message(cid, text)
+def make_admin_keyboard():
+    kb = {
+        "keyboard": [
+            ["📊 الحالة الآن", "📜 القائمة"],
+            ["ℹ️ معلومات", "🛑 إلغاء الاشتراك"],
+            ["🛠 روابط", "➕ إضافة رابط", "➖ حذف رابط"],
+            ["👥 المشتركين", "📢 بث", "⏱ تغيير الفاصل"]
+        ],
+        "resize_keyboard": True
+    }
+    return json.dumps(kb, ensure_ascii=False)
 
-# =================== محتوى الترحيب والأزرار ===================
-import json as _json
-
-def make_main_keyboard():
+def make_main_inline():
     kb = {
         "inline_keyboard": [
-            [{"text": "تحميل TestFlight", "url": TESTFLIGHT_URL}],
-            [{"text": "Instagram", "url": OWNER_IG},
-             {"text": "Telegram", "url": OWNER_TG}],
+            [{"text": "⬇️ تحميل TestFlight", "url": TESTFLIGHT_URL}],
+            [{"text": "📸 Instagram", "url": OWNER_IG},
+             {"text": "✈️ Telegram", "url": OWNER_TG}],
         ]
     }
-    return _json.dumps(kb, ensure_ascii=False)
+    return json.dumps(kb, ensure_ascii=False)
 
 def format_user_name(from_obj):
     if not from_obj: return "صديقي"
@@ -161,53 +162,54 @@ def format_user_name(from_obj):
     if uname: return "@" + uname
     return fn or "صديقي"
 
-def send_welcome(chat_id, from_obj):
+def send_message(chat_id, text, parse_mode=None, reply_markup=None):
+    data = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    try:
+        session.post(f"{API_BASE}/sendMessage", data=data, timeout=15)
+    except Exception as e:
+        print(f"❌ send_message failed: {e}")
+
+def send_welcome(chat_id, from_obj, is_admin=False):
     name = format_user_name(from_obj)
+    kb = make_admin_keyboard() if is_admin else make_control_keyboard()
+    send_message(chat_id, "مرحبًا بك! اختر من لوحة التحكم:", reply_markup=kb)
     text = (
         f"مرحبًا بك {name} 👋\n\n"
-        f"أهلاً بك في بوت التحقق من توفر تطبيق <b>{APP_NAME_AR}</b>.\n"
-        "هدف البوت هو التحقق مما إذا كان هناك مكان شاغر في التطبيق عبر TestFlight "
-        "لتستطيع تثبيته فور توفر مقاعد جديدة.\n\n"
-        "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون تطبيق TestFlight.\n"
-        "اضغط الزر التالي لتحميله ثم ارجع للبوت.\n\n"
-    )
-    send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_keyboard())
-
-def send_menu(chat_id):
-    send_message(chat_id, "اختر من الأزرار التالية:", reply_markup=make_main_keyboard())
-
-def send_about(chat_id):
-    text = (
-        f"👨‍💻 المطوّر: {OWNER_NAME}\n"
+        f"هذا البوت يتحقق من توفر تطبيق <b>{APP_NAME_AR}</b> عبر TestFlight.\n"
+        "📌 إذا توفر مكان شاغر سيتم إشعارك فورًا.\n\n"
+        "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون TestFlight.\n"
+        "⬇️ حمّله من الزر أدناه.\n\n"
+        f"👨‍💻 المطور: {OWNER_NAME}\n"
         f"📸 Instagram: {OWNER_IG}\n"
-        f"✈️ Telegram: {OWNER_TG}\n\n"
-        f"هذا البوت يتحقق من توافر مقاعد لتطبيق <b>{APP_NAME_AR}</b> على TestFlight ويبلغك فور توفره."
+        f"✈️ Telegram: {OWNER_TG}"
     )
-    send_message(chat_id, text, parse_mode="HTML")
+    send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_inline())
 
-# =================== منطق فحص TestFlight ===================
+# =================== فحص TestFlight ===================
 FULL_PATTERNS = ["This beta is full", "no longer accepting new testers"]
 AVAILABLE_PATTERNS = ["Join the beta", "Start Testing"]
 GONE_PATTERNS = ["app you're looking for can't be found", "app you’re looking for can’t be found"]
 
-def classify_html(html: str) -> str:
+def classify_html(html):
     h = html.lower()
     if any(p.lower() in h for p in GONE_PATTERNS): return "غير موجود"
     if any(p.lower() in h for p in FULL_PATTERNS): return "ممتلئ"
     if any(p.lower() in h for p in AVAILABLE_PATTERNS): return "متاح"
     return "غير واضح"
 
-def fetch(url: str, retries=3, timeout=15):
-    last_err = None
+def fetch(url, retries=3, timeout=15):
     for i in range(retries):
         try:
-            r = session.get(url, timeout=timeout, allow_redirects=True)
-            if r.status_code == 200: return r.text
-            last_err = f"HTTP {r.status_code}"
-        except Exception as e:
-            last_err = str(e)
-        time.sleep(1.2*(i+1))
-    print(f"⚠️ fetch failed {url}: {last_err}")
+            r = session.get(url, timeout=timeout)
+            if r.status_code == 200:
+                return r.text
+        except:
+            pass
+        time.sleep(1)
     return None
 
 def summarize():
@@ -217,166 +219,107 @@ def summarize():
         groups.get(meta.get("status") or "غير واضح", groups["غير واضح"]).append(url)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"📊 حالة الروابط الآن ({now}):", ""]
-    if groups["متاح"]: lines.append("✅ متاح:"); lines += [f"- {u}" for u in groups["متاح"]]; lines.append("")
-    if groups["ممتلئ"]: lines.append("⚠️ ممتلئ:"); lines += [f"- {u}" for u in groups["ممتلئ"]]; lines.append("")
-    if groups["غير موجود"]: lines.append("❌ غير موجود:"); lines += [f"- {u}" for u in groups["غير موجود"]]; lines.append("")
-    if groups["غير واضح"]: lines.append("❓ غير واضح:"); lines += [f"- {u}" for u in groups["غير واضح"]]
+    for st in ["متاح", "ممتلئ", "غير موجود", "غير واضح"]:
+        if groups[st]:
+            icon = "✅" if st == "متاح" else "⚠️" if st == "ممتلئ" else "❌" if st == "غير موجود" else "❓"
+            lines.append(f"{icon} {st}:")
+            lines += [f"- {u}" for u in groups[st]]
+            lines.append("")
     return "\n".join(lines).strip()
 
-# =================== استقبال أوامر تيليجرام ===================
+# =================== استقبال الأوامر ===================
 def updates_worker():
-    print("🛰️ Telegram long polling started")
-    # آخر تحديث مقروء
+    print("🛰️ Listening for updates...")
     last_upd = None
     if os.path.exists(PATH_LASTUPD):
         try:
-            with open(PATH_LASTUPD, "r", encoding="utf-8") as f:
-                v = f.read().strip()
-                last_upd = int(v) if v else None
-        except Exception:
-            last_upd = None
+            with open(PATH_LASTUPD, "r") as f:
+                last_upd = int(f.read().strip())
+        except:
+            pass
 
     while True:
         try:
             params = {"timeout": 50}
             if last_upd is not None:
                 params["offset"] = last_upd + 1
-            resp = session.get(f"{API_BASE}/getUpdates", params=params, timeout=60)
-            data = resp.json()
-            if not data.get("ok"):
-                time.sleep(2); continue
-
-            for upd in data.get("result", []):
+            resp = session.get(f"{API_BASE}/getUpdates", params=params, timeout=60).json()
+            if not resp.get("ok"):
+                time.sleep(2)
+                continue
+            for upd in resp["result"]:
                 last_upd = upd["update_id"]
-                with open(PATH_LASTUPD, "w", encoding="utf-8") as f:
+                with open(PATH_LASTUPD, "w") as f:
                     f.write(str(last_upd))
-
-                msg = upd.get("message") or upd.get("edited_message")
-                if not msg or "chat" not in msg: continue
+                msg = upd.get("message")
+                if not msg: continue
                 chat_id = msg["chat"]["id"]
                 text = (msg.get("text") or "").strip()
                 from_obj = msg.get("from")
-
                 is_admin = chat_id in ADMIN_IDS
 
-                # أوامر عامة
-                lower = text.lower()
-                if lower.startswith("/start"):
+                # أزرار المستخدم
+                if text.lower().startswith("/start"):
                     add_subscriber(chat_id)
-                    send_welcome(chat_id, from_obj)
+                    send_welcome(chat_id, from_obj, is_admin)
                     continue
-                if lower.startswith("/stop"):
+                if text in ["📊 الحالة الآن", "/status"]:
+                    send_message(chat_id, summarize() or "لا توجد حالة بعد.")
+                    continue
+                if text in ["📜 القائمة", "/menu"]:
+                    send_message(chat_id, "اختر من الأزرار:", reply_markup=make_main_inline())
+                    continue
+                if text in ["ℹ️ معلومات", "/about"]:
+                    send_message(chat_id, f"👨‍💻 {OWNER_NAME}\n📸 {OWNER_IG}\n✈️ {OWNER_TG}")
+                    continue
+                if text in ["🛑 إلغاء الاشتراك", "/stop"]:
                     remove_subscriber(chat_id)
                     send_message(chat_id, "🛑 تم إلغاء الاشتراك.")
                     continue
-                if lower.startswith("/status"):
-                    send_message(chat_id, summarize() or "لا توجد حالة بعد.")
-                    continue
-                if lower.startswith("/menu"):
-                    send_menu(chat_id); continue
-                if lower.startswith("/about"):
-                    send_about(chat_id); continue
 
-                # أوامر المدير
-                if not is_admin:
-                    continue
-
-                if text.startswith("/admin"):
-                    subs, nlinks, nevents, navail, started, last_event = stats_snapshot()
-                    send_message(chat_id,
-                        "🛠 لوحة المدير:\n"
-                        f"- مشتركين: {subs}\n"
-                        f"- عدد الروابط: {nlinks}\n"
-                        f"- عدد التغيّرات: {nevents} (متاح: {navail})\n"
-                        f"- بدأ التشغيل: {started}\n"
-                        f"- آخر حدث: {last_event}\n\n"
-                        "أوامر:\n"
-                        "/links — عرض الروابط\n"
-                        "/addlink <url>\n"
-                        "/removelink <url>\n"
-                        "/subs — عدد المشتركين\n"
-                        "/broadcast <نص>\n"
-                        "/setinterval <min> <max>\n"
-                        "/status — ملخص الحالة"
-                    )
-                    continue
-
-                if text.startswith("/links"):
-                    links = get_links()
-                    if not links:
-                        send_message(chat_id, "لا توجد روابط.")
+                # أزرار المدير
+                if is_admin:
+                    if text in ["🛠 روابط", "/links"]:
+                        links = get_links()
+                        if not links:
+                            send_message(chat_id, "لا توجد روابط.")
+                        else:
+                            send_message(chat_id, "\n".join([f"- {u}: {meta['status']}" for u, meta in links.items()]))
                         continue
-                    lines = ["🔗 الروابط:"]
-                    for u, meta in links.items():
-                        lines.append(f"- {u}  ({meta.get('status') or '—'})  {meta.get('last_change') or ''}")
-                    send_message(chat_id, "\n".join(lines))
-                    continue
-
-                if text.startswith("/addlink"):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) == 2 and parts[1].startswith("http"):
-                        add_link(parts[1])
-                        send_message(chat_id, "✅ تمت الإضافة.")
-                    else:
-                        send_message(chat_id, "صيغة خاطئة. مثال:\n/addlink https://testflight.apple.com/join/xxxx")
-                    continue
-
-                if text.startswith("/removelink"):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) == 2:
-                        remove_link(parts[1])
-                        send_message(chat_id, "🗑️ تم الحذف (إن وُجد).")
-                    else:
-                        send_message(chat_id, "صيغة خاطئة. مثال:\n/removelink https://...")
-                    continue
-
-                if text.startswith("/subs"):
-                    send_message(chat_id, f"👥 المشتركين: {len(list_subscribers())}")
-                    continue
-
-                if text.startswith("/broadcast"):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) == 2:
-                        broadcast("📢 بث من المدير:\n" + parts[1])
-                        send_message(chat_id, "تم الإرسال ✅")
-                    else:
-                        send_message(chat_id, "اكتب الرسالة بعد الأمر.\nمثال:\n/broadcast مرحبًا")
-                    continue
-
-                if text.startswith("/setinterval"):
-                    parts = text.split()
-                    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-                        global POLL_MIN_SEC, POLL_MAX_SEC
-                        POLL_MIN_SEC = int(parts[1]); POLL_MAX_SEC = int(parts[2])
-                        send_message(chat_id, f"⏱️ تم التحديث: {POLL_MIN_SEC}-{POLL_MAX_SEC} ثانية.")
-                    else:
-                        send_message(chat_id, "مثال:\n/setinterval 240 360")
-                    continue
+                    if text.startswith("➕") or text.startswith("/addlink"):
+                        send_message(chat_id, "أرسل الرابط بصيغة:\n/addlink <url>")
+                        continue
+                    if text.startswith("➖") or text.startswith("/removelink"):
+                        send_message(chat_id, "أرسل الرابط بصيغة:\n/removelink <url>")
+                        continue
+                    if text in ["👥 المشتركين", "/subs"]:
+                        send_message(chat_id, f"👥 المشتركين: {len(list_subscribers())}")
+                        continue
+                    if text in ["📢 بث", "/broadcast"]:
+                        send_message(chat_id, "أرسل الرسالة:\n/broadcast <نص>")
+                        continue
+                    if text in ["⏱ تغيير الفاصل", "/setinterval"]:
+                        send_message(chat_id, "أرسل:\n/setinterval <min> <max>")
+                        continue
 
         except Exception as e:
-            print(f"⚠️ updates_worker error: {e}")
+            print("⚠️ updates_worker error:", e)
             time.sleep(3)
 
-# =================== فحص الروابط الدوري ===================
-FULL_PATTERNS = ["This beta is full", "no longer accepting new testers"]
-AVAILABLE_PATTERNS = ["Join the beta", "Start Testing"]
-GONE_PATTERNS = ["app you're looking for can't be found", "app you’re looking for can’t be found"]
-
+# =================== فحص الروابط ===================
 def checker_worker():
-    print("🔎 checker started")
+    print("🔎 Checker started")
     while True:
         try:
             links = get_links()
             if not links:
-                time.sleep(10); continue
-
+                time.sleep(10)
+                continue
             changed_any = False
             newly_available = []
-
             for url, meta in links.items():
                 html = fetch(url)
-                if html is None:
-                    continue
+                if not html: continue
                 new_state = classify_html(html)
                 old_state = meta.get("status")
                 if new_state != old_state:
@@ -386,31 +329,24 @@ def checker_worker():
                     changed_any = True
                     if new_state == "متاح":
                         newly_available.append(url)
-
             if changed_any:
                 save_links(links)
                 for u in newly_available:
-                    broadcast(f"🚨 رابط متاح الآن:\n{u}")
+                    broadcast(f"🚨 متاح الآن:\n{u}")
                 broadcast(summarize())
-
             time.sleep(random.randint(POLL_MIN_SEC, POLL_MAX_SEC))
         except Exception as e:
-            print(f"⚠️ checker_worker error: {e}")
+            print("⚠️ checker_worker error:", e)
             time.sleep(5)
 
-def seed_initial_links():
-    # ابدأ بدون روابط، أضف عبر /addlink من حساب المدير
-    pass
-
+# =================== تشغيل ===================
 def main():
     if not os.path.exists(PATH_LINKS):
-        seed_initial_links()
-        save_links(get_links())
+        save_links({})
     kv_set("started_at", datetime.utcnow().isoformat())
-    t1 = threading.Thread(target=updates_worker, daemon=True)
-    t2 = threading.Thread(target=checker_worker, daemon=True)
-    t1.start(); t2.start()
-    print("🚀 bot is running. أوامر: /start /status /menu /about /stop (وللمدير /admin)")
+    threading.Thread(target=updates_worker, daemon=True).start()
+    threading.Thread(target=checker_worker, daemon=True).start()
+    print("🚀 Bot is running")
     while True:
         time.sleep(300)
 

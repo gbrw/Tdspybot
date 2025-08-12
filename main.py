@@ -157,6 +157,7 @@ def send_welcome(chat_id, from_obj, is_admin=False):
         "📌 إذا توفر مكان شاغر سيتم إشعارك فورًا.\n\n"
         "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون TestFlight.\n"
         "⬇️ حمّله من الزر أدناه.\n\n"
+        "صنع بواسطة غيث الراوي"
     )
     send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_inline())
 

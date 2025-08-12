@@ -3,7 +3,7 @@ import os, time, json, random, tempfile, threading, requests
 from datetime import datetime
 
 # ===== الإعدادات من المتغيرات =====
-TELEGRAM_TOKEN = os.environ.get("8299272165:AAH1s7qqEEO1htuiMdjF1TnvzetpB4vE1Wc")
+TELEGRAM_TOKEN = 8299272165:AAH1s7qqEEO1htuiMdjF1TnvzetpB4vE1Wc
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "238547634").split(",") if x.strip().isdigit()}
 POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "240"))
 POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "360"))

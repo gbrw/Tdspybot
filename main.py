@@ -20,7 +20,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 # بيانات المالك / الحقوق
 OWNER_NAME = "غيث الراوي"
 OWNER_IG = "https://instagram.com/gb.rw"
-OWNER_TG = "https://t.me/gb.rw"
+OWNER_TG = "https://t.me/gb_rw"
 
 # روابط وأسماء مهمة
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
@@ -144,9 +144,9 @@ import json as _json
 def make_main_keyboard():
     kb = {
         "inline_keyboard": [
-            [{"text": "⬇️ تحميل TestFlight", "url": TESTFLIGHT_URL}],
-            [{"text": "📸 Instagram", "url": OWNER_IG},
-             {"text": "✈️ Telegram", "url": OWNER_TG}],
+            [{"text": "تحميل TestFlight", "url": TESTFLIGHT_URL}],
+            [{"text": "Instagram", "url": OWNER_IG},
+             {"text": "Telegram", "url": OWNER_TG}],
         ]
     }
     return _json.dumps(kb, ensure_ascii=False)
@@ -170,9 +170,6 @@ def send_welcome(chat_id, from_obj):
         "لتستطيع تثبيته فور توفر مقاعد جديدة.\n\n"
         "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون تطبيق TestFlight.\n"
         "اضغط الزر التالي لتحميله ثم ارجع للبوت.\n\n"
-        f"👨‍💻 الحقوق: {OWNER_NAME}\n"
-        f"📸 Instagram: {OWNER_IG}\n"
-        f"✈️ Telegram: {OWNER_TG}"
     )
     send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_keyboard())
 

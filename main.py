@@ -20,6 +20,13 @@ OWNER_TG = "https://t.me/gb_rw"
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
 APP_NAME_AR = "TDS Video"
 
+# روابط ثابتة
+FIXED_LINKS = [
+    "https://testflight.apple.com/join/kYbkecxa",
+    "https://testflight.apple.com/join/uk4993r5",
+    "https://testflight.apple.com/join/6drWGVde",
+    "https://testflight.apple.com/join/1Z9HQgNw"
+]
 # =================== مسارات الملفات ===================
 os.makedirs(DATA_DIR, exist_ok=True)
 PATH_SUBS = os.path.join(DATA_DIR, "subscribers.json")
@@ -349,9 +356,14 @@ def checker_worker():
             time.sleep(5)
 
 # =================== تشغيل ===================
+def ensure_fixed_links():
+    for url in FIXED_LINKS:
+        add_link(url)
+        
 def main():
     if not os.path.exists(PATH_LINKS):
         save_links({})
+        ensure_fixed_links()
     _write_json_atomic(PATH_KV, {"started_at": datetime.utcnow().isoformat()})
     threading.Thread(target=updates_worker, daemon=True).start()
     threading.Thread(target=checker_worker, daemon=True).start()

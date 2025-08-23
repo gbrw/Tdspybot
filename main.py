@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import time
 import json
 import random
@@ -14,9 +15,11 @@ if not TELEGRAM_TOKEN:
 
 ADMIN_IDS = {238547634}  # ضع معرف المدير هنا
 
-POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "30"))
-POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "90"))
+# فواصل الاستطلاع (ثواني). ينصح 240-360 على Railway لتقليل الضغط
+POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "240"))
+POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "360"))
 
+# مجلد البيانات (يفضل Volume على Railway)
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 OWNER_NAME = "غيث الراوي"
@@ -25,7 +28,7 @@ OWNER_TG = "https://t.me/gb_rw"
 TESTFLIGHT_URL = "https://apps.apple.com/us/app/testflight/id899247664"
 APP_NAME_AR = "TDS Video"
 
-# روابط ثابتة
+# روابط ثابتة (يتم دمجها مع الروابط الديناميكية من الملف)
 FIXED_LINKS = [
     "https://testflight.apple.com/join/kYbkecxa",
     "https://testflight.apple.com/join/uk4993r5",
@@ -41,7 +44,8 @@ PATH_EVENTS = os.path.join(DATA_DIR, "events.json")
 PATH_LASTUPD = os.path.join(DATA_DIR, "last_update_id.txt")
 PATH_KV = os.path.join(DATA_DIR, "kv.json")
 
-PENDING_ACTIONS = {}
+# ذاكرة لإدخال رابط بعد أمر إضافة/حذف
+PENDING_ACTIONS = {}  # { chat_id: {"action": "add"|"remove"} }
 
 # =================== جلسة HTTP ===================
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -51,11 +55,18 @@ session.headers.update({
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.8",
 })
+# مهلات مبدئية للـ adapter
+adapter = requests.adapters.HTTPAdapter(max_retries=2)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
 
 # =================== أدوات مساعدة ===================
 
 def now_iso():
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+def log(*args):
+    print(f"[{now_iso()}]", *args, file=sys.stdout, flush=True)
 
 def read_json(path, default):
     try:
@@ -64,7 +75,7 @@ def read_json(path, default):
     except FileNotFoundError:
         return default
     except Exception as e:
-        print(f"[{now_iso()}] read_json error {path}:", e)
+        log("read_json error", path, ":", e)
         return default
 
 def write_json(path, obj):
@@ -74,7 +85,7 @@ def write_json(path, obj):
             json.dump(obj, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
     except Exception as e:
-        print(f"[{now_iso()}] write_json error {path}:", e)
+        log("write_json error", path, ":", e)
 
 def load_last_update_id():
     try:
@@ -86,9 +97,9 @@ def load_last_update_id():
 def save_last_update_id(i):
     try:
         with open(PATH_LASTUPD, "w", encoding="utf-8") as f:
-            f.write(str(i if i is not None else ""))
+            f.write("" if i is None else str(i))
     except Exception as e:
-        print(f"[{now_iso()}] save_last_update_id error:", e)
+        log("save_last_update_id error:", e)
 
 def ensure_file_defaults():
     if not os.path.exists(PATH_SUBS):
@@ -102,15 +113,15 @@ def ensure_file_defaults():
 
 ensure_file_defaults()
 
-# =================== واجهة تيليغرام ===================
+# =================== تيليغرام API ===================
 
 def tg_delete_webhook():
     try:
         r = session.get(f"{API_BASE}/deleteWebhook", timeout=10)
         r.raise_for_status()
-        print(f"[{now_iso()}] deleteWebhook:", r.json())
+        log("deleteWebhook:", r.json())
     except Exception as e:
-        print(f"[{now_iso()}] deleteWebhook error:", e)
+        log("deleteWebhook error:", e)
 
 def tg_get_updates(offset=None, timeout=50):
     params = {"timeout": timeout}
@@ -129,20 +140,24 @@ def tg_send_message(chat_id, text, **kwargs):
     }
     payload.update(kwargs)
     try:
-        r = session.post(f"{API_BASE}/sendMessage", json=payload, timeout=15)
+        r = session.post(f"{API_BASE}/sendMessage", json=payload, timeout=20)
         if r.status_code == 429:
             ra = int(r.headers.get("Retry-After", "2"))
+            log("sendMessage 429, sleeping", ra, "s")
             time.sleep(max(ra, 2))
-            r = session.post(f"{API_BASE}/sendMessage", json=payload, timeout=15)
+            r = session.post(f"{API_BASE}/sendMessage", json=payload, timeout=20)
         r.raise_for_status()
         j = r.json()
         if not j.get("ok"):
-            print(f"[{now_iso()}] sendMessage not ok:", j)
+            log("sendMessage not ok:", j)
         return j
+    except requests.HTTPError as e:
+        body = e.response.text if e.response is not None else str(e)
+        log("sendMessage HTTPError:", body)
     except Exception as e:
-        print(f"[{now_iso()}] sendMessage error:", e)
+        log("sendMessage error:", e)
 
-# =================== إدارة مشتركين/روابط ===================
+# =================== إدارة المشتركين والروابط ===================
 
 def load_subscribers():
     data = read_json(PATH_SUBS, [])
@@ -151,7 +166,7 @@ def load_subscribers():
         try:
             clean.append(int(x))
         except Exception:
-            continue
+            pass
     return list(sorted(set(clean)))
 
 def save_subscribers(subs):
@@ -164,13 +179,12 @@ def save_dynamic_links(links):
     cleaned = []
     for u in links:
         u = str(u).strip()
-        if not u:
-            continue
-        if u not in cleaned:
+        if u and u not in cleaned:
             cleaned.append(u)
     write_json(PATH_LINKS, cleaned)
 
 def all_links():
+    # دمج مع إزالة التكرارات مع الحفاظ على الترتيب
     return list(dict.fromkeys(FIXED_LINKS + load_dynamic_links()))
 
 # =================== مراقبة TestFlight ===================
@@ -180,12 +194,15 @@ def normalize_text(s: str) -> str:
         return ""
     s = s.lower()
     s = (s.replace("’", "'")
+           .replace("‘", "'")
            .replace("“", '"')
            .replace("”", '"')
            .replace("–", "-")
            .replace("—", "-")
            .replace("\u00a0", " "))
+    # إزالة الأبوستروف حتى نتعامل مع isn't / isn’t / isnt
     s = s.replace("'", "")
+    # ضغط المسافات
     s = " ".join(s.split())
     return s
 
@@ -215,7 +232,10 @@ TF_UNAVAILABLE_HINTS = [
     "page not found",
 ]
 
-def fetch_link_status(url, timeout=15):
+def fetch_link_status(url, timeout=20):
+    """
+    يرجع: open | full | not_found | unknown | error
+    """
     try:
         resp = session.get(url, timeout=timeout, allow_redirects=True)
         code = resp.status_code
@@ -223,18 +243,23 @@ def fetch_link_status(url, timeout=15):
 
         if code == 404:
             return "not_found"
+
+        # الامتلاء أولاً لمنع إيجابيات كاذبة
         for m in TF_FULL_MARKERS:
             if m in html_norm:
                 return "full"
+
         for m in TF_AVAILABLE_MARKERS:
             if m in html_norm:
                 return "open"
+
         for m in TF_UNAVAILABLE_HINTS:
             if m in html_norm:
                 return "not_found"
+
         return "unknown"
     except Exception as e:
-        print(f"[{now_iso()}] fetch_link_status error for {url}:", e)
+        log("fetch_link_status error for", url, ":", e)
         return "error"
 
 def load_kv():
@@ -246,10 +271,11 @@ def save_kv(kv):
 def broadcast(text):
     subs = load_subscribers()
     if not subs:
+        log("broadcast skipped (no subscribers)")
         return
     for uid in subs:
         tg_send_message(uid, text)
-        time.sleep(0.05)
+        time.sleep(0.05)  # تهدئة خفيفة
 
 def format_state_msg(url, state):
     if state == "open":
@@ -257,64 +283,86 @@ def format_state_msg(url, state):
     if state == "full":
         return f"⛔️ صار <b>ممتلئ</b>:\n{url}"
     if state == "not_found":
-        return f"❓ الرابط غير متاح:\n{url}"
+        return f"❓ الرابط غير متاح/غير موجود:\n{url}"
     if state == "unknown":
-        return f"ℹ️ حالة غير واضحة:\n{url}"
+        return f"ℹ️ حالة غير واضحة حاليا:\n{url}"
     return f"⚠️ خطأ أثناء الفحص:\n{url}"
 
 def watch_links_and_notify():
-    kv = load_kv()
-    last = kv.get("link_states", {})
+    """
+    خيط مراقبة الروابط. محمي بـ while True حتى لو وقع استثناء يرجع يشتغل.
+    """
     while True:
         try:
-            changed_msgs = []
-            curr = {}
-            links = all_links()
-            random.shuffle(links)
-            for url in links:
-                state = fetch_link_status(url)
-                curr[url] = {"state": state, "ts": int(time.time())}
-                prev_state = (last.get(url) or {}).get("state")
-                if state != prev_state:
-                    changed_msgs.append(format_state_msg(url, state))
-            if changed_msgs:
-                broadcast("\n\n".join(changed_msgs))
-            last = curr
-            kv["link_states"] = last
-            save_kv(kv)
-            time.sleep(random.randint(POLL_MIN_SEC, POLL_MAX_SEC))
-        except Exception as e:
-            print(f"[{now_iso()}] watch error:", e)
-            time.sleep(10)
+            kv = load_kv()
+            last = kv.get("link_states", {})
+            log("Watcher started. Links:", len(all_links()))
+            backoff = 5
+            while True:
+                changed_msgs = []
+                curr = {}
+                links = all_links()
+                if not links:
+                    log("No links to watch; sleeping 60s")
+                    time.sleep(60)
+                    continue
+                random.shuffle(links)
+                for url in links:
+                    state = fetch_link_status(url)
+                    curr[url] = {"state": state, "ts": int(time.time())}
+                    prev_state = (last.get(url) or {}).get("state")
+                    if state != prev_state:
+                        changed_msgs.append(format_state_msg(url, state))
 
-# =================== أوامر ===================
+                if changed_msgs:
+                    broadcast("\n\n".join(changed_msgs))
+                    backoff = 5  # نعيد التهدئة للمستوى الأدنى عند نشاط
+                else:
+                    # لا تغيّر: نزيد backoff حتى حد أقصى لتقليل الاستهلاك
+                    backoff = min(backoff + 5, 60)
+
+                last = curr
+                kv["link_states"] = last
+                save_kv(kv)
+
+                sleep_s = random.randint(POLL_MIN_SEC, POLL_MAX_SEC)
+                log(f"Watcher sleep {sleep_s}s (backoff={backoff})")
+                time.sleep(sleep_s)
+        except Exception as e:
+            log("watch fatal error:", e)
+            time.sleep(30)  # انتظر ثم أعد المحاولة من جديد
+
+# =================== أوامر البوت ===================
 
 HELP_TEXT = f"""\
 <b>مرحبًا 👋</b>
-بوت مراقبة روابط TestFlight لـ <b>{APP_NAME_AR}</b>.
+هذا البوت يراقب روابط TestFlight لـ <b>{APP_NAME_AR}</b> ويبلغك عند تغيّر الحالة.
 
 <b>الأوامر:</b>
 /start - بدء
 /help - مساعدة
-/subscribe - الاشتراك
+/subscribe - الاشتراك في الإشعارات
 /unsubscribe - إلغاء الاشتراك
-/status - الحالة الحالية
-/links - قائمة الروابط
+/status - الحالة الحالية من آخر فحص
+/links - قائمة الروابط المُراقَبة
 /owners - عن المالك
 /ping - اختبار
 
-<b>للمدير:</b>
-/addlink
-/removelink
+<b>للمدير فقط:</b>
+/addlink - إضافة رابط TestFlight (أرسل الرابط بعد الأمر)
+/removelink - حذف رابط TestFlight
 """
 
 def is_admin(user_id):
-    return int(user_id) in ADMIN_IDS
+    try:
+        return int(user_id) in ADMIN_IDS
+    except Exception:
+        return False
 
 def cmd_start(chat_id, from_user):
     name = (from_user.get("first_name") or "").strip()
     tg_send_message(chat_id, f"أهلًا {name or 'بك'} ✅\n"
-                             f"استخدم /subscribe للاشتراك.\n\n{HELP_TEXT}")
+                             f"استخدم /subscribe للاشتراك بالإشعارات.\n\n{HELP_TEXT}")
 
 def cmd_help(chat_id):
     tg_send_message(chat_id, HELP_TEXT)
@@ -341,55 +389,64 @@ def cmd_status(chat_id):
     kv = load_kv()
     states = kv.get("link_states", {})
     if not states:
-        tg_send_message(chat_id, "لا توجد حالات محفوظة بعد.")
+        tg_send_message(chat_id, "لا توجد حالات محفوظة بعد. انتظر أول دورة فحص…")
         return
     lines = ["<b>الحالة الحالية:</b>"]
     for url in all_links():
         s = states.get(url, {})
         st = s.get("state", "unknown")
-        badge = "✅" if st == "open" else ("⛔️" if st == "full" else "ℹ️")
-        lines.append(f"{badge} {st} — {url}")
-    tg_send_message(chat_id, "\n".join(lines))
+        ts = s.get("ts")
+        ts_str = datetime.utcfromtimestamp(ts).isoformat(timespec="seconds")+"Z" if ts else "—"
+        badge = "✅" if st == "open" else ("⛔️" if st == "full" else ("❓" if st == "not_found" else "ℹ️"))
+        lines.append(f"{badge} <code>{st}</code> — <a href='{url}'>الرابط</a> — <i>{ts_str}</i>")
+    tg_send_message(chat_id, "\n".join(lines), disable_web_page_preview=False)
 
 def cmd_links(chat_id):
     links = all_links()
     if not links:
-        tg_send_message(chat_id, "لا روابط حالياً.")
+        tg_send_message(chat_id, "لا توجد روابط حالياً.")
         return
-    body = "\n".join(f"• {u}" for u in links)
-    tg_send_message(chat_id, f"<b>الروابط:</b>\n{body}")
+    body = "\n".join(f"• <a href='{u}'>{u}</a>" for u in links)
+    tg_send_message(chat_id, f"<b>الروابط المُراقَبة ({len(links)}):</b>\n{body}",
+                    disable_web_page_preview=False)
 
 def cmd_owners(chat_id):
     tg_send_message(chat_id,
                     f"<b>المالك:</b> {OWNER_NAME}\n"
-                    f"IG: {OWNER_IG}\nTG: {OWNER_TG}\nTestFlight: {TESTFLIGHT_URL}")
+                    f"<b>Instagram:</b> {OWNER_IG}\n"
+                    f"<b>Telegram:</b> {OWNER_TG}\n"
+                    f"<b>TestFlight:</b> {TESTFLIGHT_URL}",
+                    disable_web_page_preview=False)
 
 def cmd_ping(chat_id):
     tg_send_message(chat_id, "pong ✅")
 
 def cmd_addlink(chat_id, user_id):
     if not is_admin(user_id):
-        tg_send_message(chat_id, "للمدير فقط.")
+        tg_send_message(chat_id, "هذا الأمر للمدير فقط.")
         return
     PENDING_ACTIONS[chat_id] = {"action": "add"}
-    tg_send_message(chat_id, "أرسل الرابط لإضافته.")
+    tg_send_message(chat_id, "أرسل الآن رابط TestFlight الذي تريد إضافته.")
 
 def cmd_removelink(chat_id, user_id):
     if not is_admin(user_id):
-        tg_send_message(chat_id, "للمدير فقط.")
+        tg_send_message(chat_id, "هذا الأمر للمدير فقط.")
         return
     PENDING_ACTIONS[chat_id] = {"action": "remove"}
-    tg_send_message(chat_id, "أرسل الرابط لحذفه.")
+    tg_send_message(chat_id, "أرسل الآن الرابط الذي تريد حذفه (بالضبط).")
 
 def handle_text_message(chat_id, user_id, text, from_user):
     pending = PENDING_ACTIONS.get(chat_id)
     if pending:
         action = pending.get("action")
         url = text.strip()
+        if not (url.startswith("http://") or url.startswith("https://")):
+            tg_send_message(chat_id, "الرجاء إرسال رابط صحيح يبدأ بـ http/https.")
+            return
         links = load_dynamic_links()
         if action == "add":
             if url in FIXED_LINKS or url in links:
-                tg_send_message(chat_id, "موجود مسبقاً.")
+                tg_send_message(chat_id, "الرابط موجود مسبقًا.")
             else:
                 links.append(url)
                 save_dynamic_links(links)
@@ -400,7 +457,7 @@ def handle_text_message(chat_id, user_id, text, from_user):
                 save_dynamic_links(links)
                 tg_send_message(chat_id, "تم الحذف ✅")
             else:
-                tg_send_message(chat_id, "لم أجد الرابط.")
+                tg_send_message(chat_id, "لم أجد هذا الرابط ضمن الروابط الديناميكية.")
         PENDING_ACTIONS.pop(chat_id, None)
         return
 
@@ -426,7 +483,7 @@ def handle_text_message(chat_id, user_id, text, from_user):
     elif t.startswith("/removelink"):
         cmd_removelink(chat_id, user_id)
     else:
-        tg_send_message(chat_id, "أمر غير مفهوم. /help")
+        tg_send_message(chat_id, "لم أفهم الأمر. اكتب /help لعرض الأوامر المتاحة.")
 
 def handle_update(u):
     if "message" in u:
@@ -437,358 +494,65 @@ def handle_update(u):
         text = msg.get("text", "")
         if text:
             handle_text_message(chat_id, user_id, text, from_user)
+    elif "edited_message" in u:
+        # تجاهل الرسائل المعدّلة
+        pass
 
 def poll_loop():
-    tg_delete_webhook()
-    last_id = load_last_update_id()
+    """
+    خيط polling لتيليغرام. محمي بحيث لا يخرج عند الاستثناءات.
+    """
     while True:
         try:
-            data = tg_get_updates(last_id, timeout=50)
-            updates = data.get("result", [])
-            for u in updates:
-                last_id = max(last_id or 0, u["update_id"])
-                handle_update(u)
-            save_last_update_id(last_id)
+            tg_delete_webhook()
+            last_id = load_last_update_id()
+            log("Polling started. last_update_id=", last_id)
+            backoff = 1
+            while True:
+                try:
+                    data = tg_get_updates(last_id, timeout=50)
+                    if not data.get("ok"):
+                        log("getUpdates not ok:", data)
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, 60)
+                        continue
+                    updates = data.get("result", [])
+                    if updates:
+                        backoff = 1
+                    for u in updates:
+                        last_id = max(last_id or 0, u["update_id"])
+                        handle_update(u)
+                    save_last_update_id(last_id)
+                except Exception as e:
+                    log("poll inner error:", e)
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
         except Exception as e:
-            print(f"[{now_iso()}] poll error:", e)
-            time.sleep(5)
+            log("poll fatal error:", e)
+            time.sleep(30)
 
-# =================== main ===================
+# =================== مراقبة الخيوط وإبقاء العملية حيّة ===================
 
 def main():
-    threading.Thread(target=watch_links_and_notify, daemon=True).start()
-    threading.Thread(target=poll_loop, daemon=True).start()
-    print(f"[{now_iso()}] Bot is running…")
+    log("Bot starting…")
+    # تشغيل الخيوط باسماء ثابتة لسهولة المراقبة
+    t_watch = threading.Thread(target=watch_links_and_notify, daemon=True, name="watcher")
+    t_poll = threading.Thread(target=poll_loop, daemon=True, name="poller")
+    t_watch.start()
+    t_poll.start()
+
+    # حلقة حارس: تعيد تشغيل الخيوط لو توقفت لأي سبب
     while True:
-        time.sleep(3600)
-
-if __name__ == "__main__":
-    main()})
-
-# =================== أدوات التخزين ===================
-def _read_json(path, default):
-    try:
-        if not os.path.exists(path): return default
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
-
-def _write_json_atomic(path, data):
-    fd, tmp = tempfile.mkstemp(prefix="tmp_", suffix=".json", dir=DATA_DIR)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-
-# =================== مشتركين وروابط ===================
-def add_subscriber(chat_id):
-    subs = set(_read_json(PATH_SUBS, []))
-    subs.add(chat_id)
-    _write_json_atomic(PATH_SUBS, list(subs))
-
-def list_subscribers():
-    return _read_json(PATH_SUBS, [])
-
-def get_links():
-    return _read_json(PATH_LINKS, {})
-
-def save_links(links_map):
-    _write_json_atomic(PATH_LINKS, links_map)
-
-def add_link(url):
-    links = get_links()
-    links.setdefault(url.strip(), {"status": None, "last_change": None})
-    save_links(links)
-
-def remove_link(url):
-    links = get_links()
-    if url.strip() in links:
-        links.pop(url.strip())
-        save_links(links)
-
-# =================== الأحداث/الإحصائيات ===================
-def append_event(link, old_status, new_status):
-    events = _read_json(PATH_EVENTS, [])
-    events.append({
-        "ts": datetime.utcnow().isoformat(),
-        "url": link,
-        "old": old_status,
-        "new": new_status
-    })
-    _write_json_atomic(PATH_EVENTS, events)
-
-def stats_snapshot():
-    subs = len(list_subscribers())
-    links = get_links()
-    events = _read_json(PATH_EVENTS, [])
-    navailable = sum(1 for e in events if e.get("new") == "متاح")
-    last_event = events[-1]["ts"] if events else "—"
-    started = _read_json(PATH_KV, {}).get("started_at", "—")
-    return subs, len(links), len(events), navailable, started, last_event
-
-# =================== الأزرار ===================
-def make_control_keyboard():
-    kb = {"keyboard": [["📊 الحالة الآن"], ["ℹ️ معلومات"]], "resize_keyboard": True}
-    return json.dumps(kb, ensure_ascii=False)
-
-def make_admin_keyboard():
-    kb = {
-        "keyboard": [
-            ["📊 الحالة الآن"], ["ℹ️ معلومات"],
-            ["🛠 إدارة الروابط"],
-            ["➕ إضافة رابط", "➖ حذف رابط"],
-            ["📢 بث رسالة"]
-        ],
-        "resize_keyboard": True
-    }
-    return json.dumps(kb, ensure_ascii=False)
-
-def make_main_inline():
-    kb = {
-        "inline_keyboard": [
-            [{"text": "⬇️ تحميل TestFlight", "url": TESTFLIGHT_URL}],
-            [{"text": "📸 Instagram", "url": OWNER_IG},
-             {"text": "✈️ Telegram", "url": OWNER_TG}],
-        ]
-    }
-    return json.dumps(kb, ensure_ascii=False)
-
-# =================== رسائل ===================
-def send_message(chat_id, text, parse_mode=None, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text}
-    if parse_mode: data["parse_mode"] = parse_mode
-    if reply_markup: data["reply_markup"] = reply_markup
-    try:
-        session.post(f"{API_BASE}/sendMessage", data=data, timeout=15)
-    except Exception as e:
-        print(f"❌ send_message failed: {e}")
-
-def format_user_name(from_obj):
-    if not from_obj: return "صديقي"
-    fn = (from_obj.get("first_name") or "").strip()
-    ln = (from_obj.get("last_name") or "").strip()
-    uname = from_obj.get("username")
-    full = (fn + " " + ln).strip()
-    if full: return full
-    if uname: return "@" + uname
-    return fn or "صديقي"
-
-def send_welcome(chat_id, from_obj, is_admin=False):
-    name = format_user_name(from_obj)
-    kb = make_admin_keyboard() if is_admin else make_control_keyboard()
-    send_message(chat_id, "مرحبًا بك! اختر من لوحة التحكم:", reply_markup=kb)
-    text = (
-        f"مرحبًا بك {name} 👋\n\n"
-        f"هذا البوت يتحقق من توفر تطبيق <b>{APP_NAME_AR}</b> عبر TestFlight.\n"
-        "📌 إذا توفر مكان شاغر سيتم إشعارك فورًا.\n\n"
-        "ℹ️ <b>ملاحظة</b>: لا يمكنك تثبيت التطبيق بدون TestFlight.\n"
-        "⬇️ حمّله من الزر أدناه.\n\n"
-        "صنع بواسطة غيث الراوي"
-    )
-    send_message(chat_id, text, parse_mode="HTML", reply_markup=make_main_inline())
-
-# =================== فحص الروابط ===================
-FULL_PATTERNS = ["This beta is full", "no longer accepting new testers"]
-AVAILABLE_PATTERNS = ["Join the beta", "Start Testing"]
-GONE_PATTERNS = ["app you're looking for can't be found", "app you’re looking for can’t be found"]
-
-def classify_html(html):
-    h = html.lower()
-    if any(p.lower() in h for p in GONE_PATTERNS): return "غير موجود"
-    if any(p.lower() in h for p in FULL_PATTERNS): return "ممتلئ"
-    if any(p.lower() in h for p in AVAILABLE_PATTERNS): return "متاح"
-    return "غير واضح"
-
-def fetch(url):
-    try:
-        r = session.get(url, timeout=15)
-        if r.status_code == 200: return r.text
-    except:
-        pass
-    return None
-
-def summarize():
-    links = get_links()
-    groups = {"متاح": [], "ممتلئ": [], "غير موجود": [], "غير واضح": []}
-    for url, meta in links.items():
-        groups.get(meta.get("status") or "غير واضح", groups["غير واضح"]).append(url)
-
-    # التاريخ فقط + كلمة "الآن"
-    today = datetime.now().strftime("%Y-%m-%d")
-    lines = [f"📊 حالة الروابط الآن ({today} - الآن):", ""]
-
-    for st in ["متاح", "ممتلئ", "غير موجود", "غير واضح"]:
-        if groups[st]:
-            icon = "✅" if st == "متاح" else "⚠️" if st == "ممتلئ" else "❌" if st == "غير موجود" else "❓"
-            lines.append(f"{icon} {st}:")
-            lines += [f"- {u}" for u in groups[st]]
-            lines.append("")
-    return "\n".join(lines).strip()
-
-# =================== استقبال الأوامر ===================
-def updates_worker():
-    print("🛰️ Listening for updates...")
-    last_upd = None
-    if os.path.exists(PATH_LASTUPD):
-        try:
-            with open(PATH_LASTUPD, "r") as f:
-                last_upd = int(f.read().strip())
-        except:
-            pass
-
-    while True:
-        try:
-            params = {"timeout": 50}
-            if last_upd is not None:
-                params["offset"] = last_upd + 1
-            resp = session.get(f"{API_BASE}/getUpdates", params=params, timeout=60).json()
-            if not resp.get("ok"):
-                time.sleep(2)
-                continue
-            for upd in resp["result"]:
-                last_upd = upd["update_id"]
-                with open(PATH_LASTUPD, "w") as f:
-                    f.write(str(last_upd))
-                msg = upd.get("message")
-                if not msg: continue
-                chat_id = msg["chat"]["id"]
-                text = (msg.get("text") or "").strip()
-                from_obj = msg.get("from")
-                is_admin = chat_id in ADMIN_IDS
-
-                # أوامر عامة
-                if text.lower().startswith("/start"):
-                    add_subscriber(chat_id)
-                    send_welcome(chat_id, from_obj, is_admin)
-                    continue
-                if text in ["📊 الحالة الآن", "/status"]:
-                    send_message(chat_id, summarize() or "لا توجد حالة بعد.")
-                    continue
-                if text in ["ℹ️ معلومات", "/about"]:
-                    send_message(chat_id, f"👨‍💻 {OWNER_NAME}\n📸 {OWNER_IG}\n✈️ {OWNER_TG}")
-                    continue
-
-                # أوامر المدير
-                if is_admin:
-                    if text in ["🛠 إدارة الروابط", "/links"]:
-                        links = get_links()
-                        if not links:
-                            send_message(chat_id, "لا توجد روابط.")
-                        else:
-                            lines = ["🔗 الروابط:"]
-                            for u, meta in links.items():
-                                lines.append(f"- {u}  ({meta.get('status') or '—'})")
-                            send_message(chat_id, "\n".join(lines))
-                        continue
-
-                    if text == "➕ إضافة رابط":
-                        PENDING_ACTIONS[chat_id] = {"action": "add"}
-                        send_message(chat_id, "أرسل الرابط الآن:")
-                        continue
-                    if text == "➖ حذف رابط":
-                        PENDING_ACTIONS[chat_id] = {"action": "remove"}
-                        send_message(chat_id, "أرسل الرابط الذي تريد حذفه:")
-                        continue
-
-                    if text.startswith("/addlink"):
-                        parts = text.split(maxsplit=1)
-                        if len(parts) == 2 and parts[1].startswith("http"):
-                            add_link(parts[1])
-                            send_message(chat_id, "✅ تمت الإضافة.")
-                        else:
-                            send_message(chat_id, "صيغة خاطئة.")
-                        continue
-                    if text.startswith("/removelink"):
-                        parts = text.split(maxsplit=1)
-                        if len(parts) == 2:
-                            remove_link(parts[1])
-                            send_message(chat_id, "🗑️ تم الحذف.")
-                        else:
-                            send_message(chat_id, "صيغة خاطئة.")
-                        continue
-
-                    if text == "📢 بث رسالة":
-                        send_message(chat_id, "أرسل نص الرسالة:")
-                        PENDING_ACTIONS[chat_id] = {"action": "broadcast"}
-                        continue
-
-                # استقبال الروابط أو البث بناءً على الإجراء المعلّق
-                if chat_id in PENDING_ACTIONS:
-                    act = PENDING_ACTIONS.pop(chat_id)
-                    if act["action"] == "add":
-                        if text.startswith("http"):
-                            add_link(text)
-                            send_message(chat_id, "✅ تمت الإضافة.")
-                        else:
-                            send_message(chat_id, "صيغة غير صحيحة.")
-                        continue
-                    if act["action"] == "remove":
-                        if text.startswith("http"):
-                            remove_link(text)
-                            send_message(chat_id, "🗑️ تم الحذف.")
-                        else:
-                            send_message(chat_id, "صيغة غير صحيحة.")
-                        continue
-                    if act["action"] == "broadcast":
-                        for cid in list_subscribers():
-                            send_message(cid, text)
-                        send_message(chat_id, "✅ تم الإرسال.")
-                        continue
-
-        except Exception as e:
-            print("⚠️ updates_worker error:", e)
-            time.sleep(3)
-
-# =================== فحص الروابط ===================
-def checker_worker():
-    print("🔎 Checker started")
-    while True:
-        try:
-            links = get_links()
-            if not links:
-                time.sleep(10)
-                continue
-            changed_any = False
-            newly_available = []
-            for url, meta in links.items():
-                html = fetch(url)
-                if not html: continue
-                new_state = classify_html(html)
-                old_state = meta.get("status")
-                if new_state != old_state:
-                    links[url]["status"] = new_state
-                    links[url]["last_change"] = datetime.utcnow().isoformat()
-                    append_event(url, old_state, new_state)
-                    changed_any = True
-                    if new_state == "متاح":
-                        newly_available.append(url)
-            if changed_any:
-                save_links(links)
-                for u in newly_available:
-                    for cid in list_subscribers():
-                        send_message(cid, f"🚨 متاح الآن:\n{u}")
-                for cid in list_subscribers():
-                    send_message(cid, summarize())
-            time.sleep(random.randint(POLL_MIN_SEC, POLL_MAX_SEC))
-        except Exception as e:
-            print("⚠️ checker_worker error:", e)
-            time.sleep(5)
-
-# =================== تشغيل ===================
-def ensure_fixed_links():
-    for url in FIXED_LINKS:
-        add_link(url)
-        
-def main():
-    if not os.path.exists(PATH_LINKS):
-        save_links({})
-        ensure_fixed_links()
-    _write_json_atomic(PATH_KV, {"started_at": datetime.utcnow().isoformat()})
-    threading.Thread(target=updates_worker, daemon=True).start()
-    threading.Thread(target=checker_worker, daemon=True).start()
-    print("🚀 Bot is running...")
-    while True:
-        time.sleep(300)
+        names = [t.name for t in threading.enumerate()]
+        log("Threads alive:", names)
+        alive_names = set(names)
+        if "watcher" not in alive_names:
+            log("watcher thread is down. restarting…")
+            threading.Thread(target=watch_links_and_notify, daemon=True, name="watcher").start()
+        if "poller" not in alive_names:
+            log("poller thread is down. restarting…")
+            threading.Thread(target=poll_loop, daemon=True, name="poller").start()
+        time.sleep(300)  # راقب كل 5 دقائق
 
 if __name__ == "__main__":
     main()

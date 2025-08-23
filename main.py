@@ -9,7 +9,7 @@ import requests
 from datetime import datetime
 
 # =================== الإعدادات ===================
-TELEGRAM_TOKEN = os.environ.get("8299272165:AAH1s7qqEEO1htuiMdjF1TnvzetpB4vE1Wc")
+TELEGRAM_TOKEN = "8299272165:AAH1s7qqEEO1htuiMdjF1TnvzetpB4vE1Wc"
 if not TELEGRAM_TOKEN:
     raise SystemExit("❌ TELEGRAM_TOKEN غير موجود في المتغيرات.")
 

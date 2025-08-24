@@ -10,14 +10,14 @@ import pytz
 from datetime import datetime
 
 # =================== الإعدادات ===================
-TELEGRAM_TOKEN = "8299272165:AAH1s7qqEEO1htuiMdjF1TnvzetpB4vE1Wc"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
-    raise SystemExit("❌ TELEGRAM_TOKEN غير موجود في المتغيرات.")
+    raise ValueError("TELEGRAM_TOKEN environment variable is required")
 
 POLL_MIN_SEC = int(os.environ.get("POLL_MIN_SEC", "240"))
 POLL_MAX_SEC = int(os.environ.get("POLL_MAX_SEC", "360"))
 
-DATA_DIR = os.environ.get("DATA_DIR", "/data")
+DATA_DIR = os.environ.get("DATA_DIR", ".")
 
 OWNER_NAME = "غيث الراوي"
 OWNER_IG = "https://instagram.com/gb.rw"
@@ -34,7 +34,6 @@ FIXED_LINKS = [
 ]
 
 # =================== مسارات الملفات ===================
-os.makedirs(DATA_DIR, exist_ok=True)
 PATH_SUBS = os.path.join(DATA_DIR, "subscribers.json")
 PATH_KV = os.path.join(DATA_DIR, "kv.json")
 PATH_LASTUPD = os.path.join(DATA_DIR, "last_update_id.txt")
@@ -71,18 +70,37 @@ def now_iso():
 def log(*args):
     print(f"[{now_iso()}]", *args, file=sys.stdout, flush=True)
 
+# =================== إنشاء مجلد البيانات ===================
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    log(f"Data directory ensured at: {DATA_DIR}")
+except Exception as e:
+    log(f"Error creating data directory {DATA_DIR}: {e}")
+    raise
+
 def read_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            log(f"Successfully loaded data from {path}")
+            return data
     except FileNotFoundError:
+        log(f"File {path} not found, using default value")
+        return default
+    except Exception as e:
+        log(f"Error reading {path}: {e}, using default value")
         return default
 
 def write_json(path, obj):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        log(f"Successfully wrote data to {path}")
+    except Exception as e:
+        log(f"Error writing to {path}: {e}")
+        raise
 
 def load_last_update_id():
     try:
@@ -226,9 +244,22 @@ def save_kv(kv):
 
 def broadcast(text):
     subs = load_subscribers()
+    total_subs = len(subs)
+    log(f"Broadcasting to {total_subs} subscribers")
+    
+    sent_count = 0
+    failed_count = 0
+    
     for uid in subs:
-        tg_send_message(uid, text, reply_markup=main_keyboard())
-        time.sleep(0.05)
+        try:
+            tg_send_message(uid, text, reply_markup=main_keyboard())
+            sent_count += 1
+            time.sleep(0.05)
+        except Exception as e:
+            log(f"Failed to send message to subscriber {uid}: {e}")
+            failed_count += 1
+    
+    log(f"Broadcast complete: {sent_count} sent, {failed_count} failed")
 
 def format_state_msg(url, state, ts):
     labels = {
@@ -242,28 +273,62 @@ def format_state_msg(url, state, ts):
     return f"{badge} {label} — {format_time(ts)}\n🔗 {url}"
 
 def watch_links_and_notify():
+    log("Starting TestFlight monitoring...")
     while True:
         try:
             kv = load_kv()
             last = kv.get("link_states", {})
+            log(f"Loaded {len(last)} previous link states")
+            
             while True:
                 changed_msgs = []
                 curr = {}
-                for url in FIXED_LINKS:
-                    state = fetch_link_status(url)
-                    ts = int(time.time())
-                    curr[url] = {"state": state, "ts": ts}
-                    prev_state = (last.get(url) or {}).get("state")
-                    if state != prev_state:
-                        changed_msgs.append(format_state_msg(url, state, ts))
+                total_links = len(FIXED_LINKS)
+                
+                log(f"Checking {total_links} TestFlight links...")
+                
+                for i, url in enumerate(FIXED_LINKS, 1):
+                    try:
+                        state = fetch_link_status(url)
+                        ts = int(time.time())
+                        curr[url] = {"state": state, "ts": ts}
+                        prev_state = (last.get(url) or {}).get("state")
+                        
+                        log(f"Link {i}/{total_links}: {state} (was: {prev_state or 'unknown'})")
+                        
+                        # Only send notification if this is not the first check AND state actually changed
+                        if prev_state is not None and state != prev_state:
+                            changed_msgs.append(format_state_msg(url, state, ts))
+                            log(f"State change detected for {url}: {prev_state} -> {state}")
+                    
+                    except Exception as e:
+                        log(f"Error checking link {url}: {e}")
+                        curr[url] = {"state": "error", "ts": int(time.time())}
+                
                 if changed_msgs:
-                    broadcast("\n\n".join(changed_msgs))
+                    log(f"Broadcasting {len(changed_msgs)} state changes to subscribers")
+                    try:
+                        broadcast("\n\n".join(changed_msgs))
+                        log("Notifications sent successfully")
+                    except Exception as e:
+                        log(f"Error broadcasting notifications: {e}")
+                else:
+                    log("No state changes detected")
+                
                 last = curr
                 kv["link_states"] = last
-                save_kv(kv)
-                time.sleep(random.randint(POLL_MIN_SEC, POLL_MAX_SEC))
+                try:
+                    save_kv(kv)
+                    log("Link states saved successfully")
+                except Exception as e:
+                    log(f"Error saving link states: {e}")
+                
+                sleep_time = random.randint(POLL_MIN_SEC, POLL_MAX_SEC)
+                log(f"Sleeping for {sleep_time} seconds before next check...")
+                time.sleep(sleep_time)
+                
         except Exception as e:
-            log("watch error:", e)
+            log("Critical error in watch loop:", e)
             time.sleep(30)
 
 # =================== رسائل الواجهة ===================
